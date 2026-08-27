@@ -1,0 +1,12 @@
+# 그누보드 민감/생성 파일 (이 레포에 실수로 들어오는 것을 방지)
+data/dbconfig.php
+data/
+*.log
+
+# OS / 편집기
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+.vscode/
+*.swp

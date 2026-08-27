@@ -291,3 +291,255 @@ function get_qa_status_label($status) {
 기본 그누보드 코드가 `qa_status = 1` 을 "답변완료"로 간주하는 곳이 있다.
 확장 후에는 목록 카운트나 메일 발송 조건이 의도와 달라질 수 있으므로,
 상태를 쓰는 지점을 검색해 `qa_status = 3` 기준으로 맞추는지 확인한다.
+
+## 7. 커스텀 관리자
+
+그누보드 기본 관리자는 개발자 기준이라 운영자가 쓰기 어렵다.
+상담 처리와 게시판 관리에 필요한 화면만 따로 만든다.
+
+```
+g5-custom/adm/
+├── _common.php        # 공통 부트스트랩 + 권한 검사
+├── qa_list.php        # 상담 목록 (검색/상태 필터/페이징)
+├── qa_view.php        # 상담 상세 + 답변 작성
+├── qa_update.php      # 상태 변경 / 답변 저장 처리
+└── board_manage.php   # 게시판 글 관리 (일괄 삭제/공지 지정)
+```
+
+### 공통 부트스트랩
+
+권한 검사를 파일마다 반복하지 않고 한 곳에 모은다.
+
+```php
+<?php
+// g5-custom/adm/_common.php
+include_once(dirname(dirname(dirname(__FILE__))).'/common.php');
+
+// 관리자 외 접근 차단. $is_admin 은 문자열이므로 빈 값 검사로 판단한다.
+if (!$is_admin) {
+    alert('관리자만 접근할 수 있습니다.', G5_URL);
+}
+
+include_once(G5_PATH.'/g5-custom/inc/config.php');
+```
+
+각 관리자 파일 첫 줄에서 이것만 불러온다.
+
+```php
+<?php
+include_once('./_common.php');
+```
+
+> 권한 검사를 빠뜨리면 상담 개인정보(이름/연락처/이메일)가 URL만 알면 열린다.
+> 신규 관리자 파일을 추가할 때 `_common.php` 를 불러왔는지 반드시 확인한다.
+
+### 상담 목록
+
+상태 필터, 검색, 페이징이 기본이다. 쿼리는 반드시 바인딩 또는 이스케이프한다.
+
+```php
+<?php
+include_once('./_common.php');
+
+$qa_status = isset($_GET['qa_status']) && $_GET['qa_status'] !== '' ? (int)$_GET['qa_status'] : -1;
+$stx       = isset($_GET['stx']) ? trim($_GET['stx']) : '';
+$page      = max(1, (int)(isset($_GET['page']) ? $_GET['page'] : 1));
+$rows      = 20;
+$from      = ($page - 1) * $rows;
+
+$where = array(" qa_parent = 0 ");   // 원본 문의만
+if ($qa_status >= 0) {
+    $where[] = " qa_status = '".$qa_status."' ";
+}
+if ($stx !== '') {
+    $s = sql_real_escape_string($stx);
+    $where[] = " (qa_subject like '%$s%' or qa_name like '%$s%' or qa_hp like '%$s%') ";
+}
+$sql_where = implode(' and ', $where);
+
+$row  = sql_fetch(" select count(*) as cnt from {$g5['qa_content_table']} where {$sql_where} ");
+$total = (int)$row['cnt'];
+
+$result = sql_query("
+    select qa_id, qa_subject, qa_name, qa_hp, qa_status, qa_datetime
+      from {$g5['qa_content_table']}
+     where {$sql_where}
+     order by qa_id desc
+     limit {$from}, {$rows}
+");
+?>
+```
+
+목록 출력에서 상태 라벨과 클래스는 `config.php` 의 배열을 쓴다.
+
+```php
+<?php while ($qa = sql_fetch_array($result)) { ?>
+<tr>
+    <td><?php echo $qa['qa_id']; ?></td>
+    <td><a href="./qa_view.php?qa_id=<?php echo $qa['qa_id']; ?>"><?php echo get_text($qa['qa_subject']); ?></a></td>
+    <td><?php echo get_text($qa['qa_name']); ?></td>
+    <td><?php echo get_text($qa['qa_hp']); ?></td>
+    <td><span class="qa_status <?php echo $qa_status_class[(int)$qa['qa_status']]; ?>"><?php echo get_qa_status_label($qa['qa_status']); ?></span></td>
+    <td><?php echo substr($qa['qa_datetime'], 0, 10); ?></td>
+</tr>
+<?php } ?>
+```
+
+### 상태 변경 처리
+
+상태 변경은 POST로만 받고, 토큰으로 위조를 막고, 값 범위를 검증한다.
+
+```php
+<?php
+// g5-custom/adm/qa_update.php
+include_once('./_common.php');
+check_admin_token();                       // CSRF 방어
+
+$qa_id     = (int)(isset($_POST['qa_id']) ? $_POST['qa_id'] : 0);
+$qa_status = (int)(isset($_POST['qa_status']) ? $_POST['qa_status'] : -1);
+
+if ($qa_id < 1) {
+    alert('잘못된 요청입니다.');
+}
+// 허용 범위 밖의 값을 그대로 저장하지 않는다.
+if (!array_key_exists($qa_status, $qa_status_label)) {
+    alert('잘못된 상태값입니다.');
+}
+
+sql_query(" update {$g5['qa_content_table']}
+               set qa_status = '{$qa_status}'
+             where qa_id = '{$qa_id}' ");
+
+goto_url('./qa_view.php?qa_id='.$qa_id);
+```
+
+폼에는 토큰을 함께 넣는다.
+
+```php
+<form method="post" action="./qa_update.php">
+    <input type="hidden" name="token" value="<?php echo get_admin_token(); ?>">
+    <input type="hidden" name="qa_id" value="<?php echo $qa_id; ?>">
+    <select name="qa_status">
+        <?php foreach ($qa_status_label as $k => $v) { ?>
+        <option value="<?php echo $k; ?>"<?php echo ((int)$qa['qa_status'] === $k ? ' selected' : ''); ?>><?php echo $v; ?></option>
+        <?php } ?>
+    </select>
+    <button type="submit">상태 변경</button>
+</form>
+```
+
+> `check_admin_token()` / `get_admin_token()` 은 그누보드 버전에 따라 제공 여부가 다르다.
+> 없으면 `$token = get_token();` 과 `check_token()` 계열 함수로 대체하고, 반드시 POST + 토큰 검증을 유지한다.
+
+## 8. 진입점 연결
+
+스킨과 커스텀 관리자를 그누보드가 실제로 불러오도록 연결하는 단계다.
+
+### 게시판 스킨 연결
+
+그누보드는 게시판 스킨을 `G5_SKIN_PATH/board/{bo_skin}` 에서 찾는다.
+스킨을 `g5-custom/` 에 두었으므로 두 가지 방법이 있다.
+
+**방법 A — 프록시 스킨 (권장)**
+
+`skin/board/{project}/` 에 얇은 로더만 두고 실제 구현은 `g5-custom` 에서 불러온다.
+관리자 화면 스킨 선택 목록에 정상적으로 노출되는 것이 장점이다.
+
+```php
+<?php
+// skin/board/{project}/list.skin.php
+if (!defined('_GNUBOARD_')) exit;
+include_once(G5_PATH.'/g5-custom/skin/board/{project}/list.skin.php');
+```
+
+`view.skin.php`, `write.skin.php` 도 같은 방식으로 만든다.
+
+이때 `$board_skin_url` 은 프록시 폴더를 가리키므로, 스킨 내부 자산 경로는
+`$board_skin_url` 대신 프로젝트 상수를 쓴다.
+
+```php
+<!-- 지양: 프록시 폴더를 가리켜 자산을 찾지 못한다 -->
+<img src="<?php echo $board_skin_url; ?>/img/icon.png">
+
+<!-- 권장 -->
+<img src="<?php echo PRJ_URL; ?>/skin/board/{project}/img/icon.png">
+```
+
+**방법 B — 상대 경로 스킨명**
+
+`g5_board.bo_skin` 값에 상대 경로를 넣는다.
+
+```sql
+UPDATE g5_board
+   SET bo_skin        = '../g5-custom/skin/board/{project}',
+       bo_mobile_skin = '../g5-custom/skin/board/{project}'
+ WHERE bo_table = 'notice';
+```
+
+간단하지만 관리자 스킨 선택 목록에 나타나지 않고, 그누보드 버전에 따라 경로 처리가 다를 수 있다.
+**적용 후 목록/상세/쓰기 화면이 모두 정상 동작하는지 직접 확인한 뒤 채택한다.**
+
+### Q&A 스킨 연결
+
+Q&A 스킨은 `g5_qa_config` 에서 지정한다. 컬럼명은 버전에 따라 다르므로 실제 스키마를 확인한다.
+
+```sql
+UPDATE g5_qa_config
+   SET qa_skin        = '{project}',
+       qa_mobile_skin = '{project}';
+```
+
+프록시 방식이면 `skin/qa/{project}/` 에 로더를 둔다.
+
+```php
+<?php
+// skin/qa/{project}/list.skin.php
+if (!defined('_GNUBOARD_')) exit;
+include_once(G5_PATH.'/g5-custom/skin/qa/{project}/list.skin.php');
+```
+
+### 프론트에서 게시판 호출
+
+정적 페이지 안에 게시판을 끼워 넣을 때는 `outlogin` 방식이 아니라 링크로 연결한다.
+
+```php
+<a href="<?php echo G5_BBS_URL; ?>/board.php?bo_table=notice">공지사항</a>
+<a href="<?php echo G5_BBS_URL; ?>/qalist.php">문의하기</a>
+<a href="<?php echo G5_BBS_URL; ?>/qawrite.php">문의 작성</a>
+```
+
+최신글을 메인에 뿌릴 때는 그누보드 내장 함수를 쓴다.
+
+```php
+<?php echo latest('{project}_main', 'notice', 5, 40); ?>
+```
+
+첫 인자는 최신글 스킨명이다. `skin/latest/{project}_main/latest.skin.php` 를 만들어 둔다.
+
+### 관리자 메뉴 등록
+
+`adm/admin.menu.*.php` 에 파일을 추가해 커스텀 관리자를 메뉴에 노출한다.
+기존 파일의 배열 형식을 먼저 열어보고 **같은 형식에 맞춘다.** 버전에 따라 항목 수가 다르다.
+
+```php
+<?php
+// adm/admin.menu.900.php
+if (!defined('_GNUBOARD_')) exit;
+
+$menu['menu900'] = array(
+    array('900000', '{project} 관리', '', ''),
+    array('900100', '상담 목록',   G5_URL.'/g5-custom/adm/qa_list.php',      'super'),
+    array('900200', '게시판 관리', G5_URL.'/g5-custom/adm/board_manage.php', 'super'),
+);
+```
+
+메뉴에 노출되는 것과 접근이 차단되는 것은 별개다.
+**메뉴를 숨기는 것으로 권한 제어를 대신하지 않는다.** 파일 상단의 `_common.php` 권한 검사가 실제 방어선이다.
+
+### 연결 확인 체크리스트
+
+- 게시판 목록 / 상세 / 쓰기 3개 화면이 커스텀 스킨으로 렌더링되는가
+- 모바일 접속 시에도 같은 스킨이 적용되는가 (`bo_mobile_skin` 누락 여부)
+- Q&A 목록 / 작성 / 상세가 커스텀 스킨으로 나오는가
+- 비로그인 상태에서 커스텀 관리자 URL 직접 입력 시 차단되는가
+- CSS/JS/이미지가 404 없이 로드되는가 (경로 대소문자 확인)

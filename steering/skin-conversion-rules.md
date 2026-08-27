@@ -274,3 +274,235 @@ if (!defined('_GNUBOARD_')) exit;
 - 첨부파일 배열 순회는 그누보드 버전마다 구조가 다르다. 기본 스킨의 순회 방식을 그대로 가져온다.
 - `$update_href` / `$delete_href` 는 권한이 없으면 빈 값이다. 값 존재 여부로 버튼을 조건 출력한다.
   **버튼을 CSS로 숨기는 것은 권한 제어가 아니다.**
+
+## 6. Q&A 문의 작성 — `write.skin.php`
+
+비회원 문의를 허용하는 폼이다. 작성자 정보를 직접 받고 캡차와 동의 체크를 반드시 포함한다.
+
+### 제공되는 주요 변수
+
+| 변수 | 설명 |
+|---|---|
+| `$w` | 빈 값이면 신규, `'u'` 면 수정 |
+| `$qa_id` | 수정 시 대상 ID |
+| `$qa` | 수정 시 기존 데이터 배열 |
+| `$qa_config` | Q&A 설정 |
+| `$is_member` / `$member` | 로그인 여부 / 회원 정보 |
+
+### 변환 예제
+
+```php
+<?php
+if (!defined('_GNUBOARD_')) exit;
+
+// 로그인 회원이면 기본값을 채워준다. 비회원이면 빈 값.
+$def_name  = $is_member ? $member['mb_name']  : '';
+$def_email = $is_member ? $member['mb_email'] : '';
+$def_hp    = $is_member ? $member['mb_hp']    : '';
+?>
+<div class="qa_wrap qa_write">
+
+    <form name="fwrite" id="fwrite" method="post" action="<?php echo G5_BBS_URL; ?>/qawrite_update.php"
+          enctype="multipart/form-data" onsubmit="return fwrite_submit(this);">
+        <input type="hidden" name="token" value="">
+        <input type="hidden" name="w" value="<?php echo $w; ?>">
+        <input type="hidden" name="qa_id" value="<?php echo $qa_id; ?>">
+        <input type="hidden" name="qa_html" value="0">
+
+        <div class="form_row">
+            <label for="qa_name" class="form_label">이름 <span class="req">*</span></label>
+            <input type="text" name="qa_name" id="qa_name" required
+                   value="<?php echo isset($qa['qa_name']) ? get_text($qa['qa_name']) : $def_name; ?>"
+                   class="form_input" maxlength="20">
+        </div>
+
+        <div class="form_row">
+            <label for="qa_hp" class="form_label">연락처 <span class="req">*</span></label>
+            <input type="tel" name="qa_hp" id="qa_hp" required
+                   value="<?php echo isset($qa['qa_hp']) ? get_text($qa['qa_hp']) : $def_hp; ?>"
+                   class="form_input" maxlength="20" placeholder="010-0000-0000">
+        </div>
+
+        <div class="form_row">
+            <label for="qa_email" class="form_label">이메일</label>
+            <input type="email" name="qa_email" id="qa_email"
+                   value="<?php echo isset($qa['qa_email']) ? get_text($qa['qa_email']) : $def_email; ?>"
+                   class="form_input" maxlength="100">
+        </div>
+
+        <?php if (!$is_member) { ?>
+        <div class="form_row">
+            <label for="qa_password" class="form_label">비밀번호 <span class="req">*</span></label>
+            <input type="password" name="qa_password" id="qa_password" <?php echo ($w === '' ? 'required' : ''); ?>
+                   class="form_input" maxlength="20">
+            <p class="form_help">문의 내용 확인 시 사용합니다.</p>
+        </div>
+        <?php } ?>
+
+        <div class="form_row">
+            <label for="qa_subject" class="form_label">제목 <span class="req">*</span></label>
+            <input type="text" name="qa_subject" id="qa_subject" required
+                   value="<?php echo isset($qa['qa_subject']) ? get_text($qa['qa_subject']) : ''; ?>"
+                   class="form_input" maxlength="255">
+        </div>
+
+        <div class="form_row">
+            <label for="qa_content" class="form_label">문의 내용 <span class="req">*</span></label>
+            <textarea name="qa_content" id="qa_content" required class="form_textarea" rows="10"><?php echo isset($qa['qa_content']) ? get_text($qa['qa_content']) : ''; ?></textarea>
+        </div>
+
+        <div class="form_row form_agree">
+            <input type="checkbox" name="agree_privacy" id="agree_privacy" value="1">
+            <label for="agree_privacy">개인정보 수집·이용에 동의합니다. <span class="req">*</span></label>
+            <div class="agree_box">
+                수집항목: 이름, 연락처, 이메일 / 목적: 문의 접수 및 답변 / 보유기간: 문의 처리 완료 후 3년
+            </div>
+        </div>
+
+        <div class="form_row form_captcha">
+            <?php echo captcha_html(); ?>
+        </div>
+
+        <div class="board_btn_area">
+            <button type="submit" class="btn_board btn_submit">문의 등록</button>
+            <a href="<?php echo G5_BBS_URL; ?>/qalist.php" class="btn_board btn_cancel">취소</a>
+        </div>
+    </form>
+
+</div>
+```
+
+### 검증 스크립트
+
+클라이언트 검증은 편의 기능일 뿐이다. **서버 검증을 반드시 함께 둔다.**
+
+```javascript
+function fwrite_submit(f) {
+    if (!f.agree_privacy.checked) {
+        alert('개인정보 수집·이용에 동의해 주세요.');
+        f.agree_privacy.focus();
+        return false;
+    }
+    if (typeof chk_captcha === 'function' && !chk_captcha()) {
+        return false;
+    }
+    return true;
+}
+```
+
+### 주의점
+
+- `qa_html` 은 `0` 으로 고정한다. 비회원 입력에 HTML을 허용하지 않는다.
+- `captcha_html()` 을 넣었다고 검증이 되는 것이 아니다.
+  저장 처리에서 `chk_captcha()` 를 호출해야 실제로 막힌다.
+- `token` hidden 값은 그누보드 스크립트가 채운다. 필드 자체를 빠뜨리면 저장이 거부된다.
+- 동의 체크박스는 서버에서도 검증한다. JS는 우회 가능하다.
+- 수정(`$w === 'u'`) 일 때 비밀번호를 필수로 만들면 수정이 막힌다. 신규일 때만 `required` 를 붙인다.
+- `enctype="multipart/form-data"` 는 첨부파일을 받을 때만 의미가 있다. 첨부가 없으면 생략해도 된다.
+
+## 7. Q&A 목록과 상세
+
+### 목록 — `list.skin.php`
+
+상태 배지를 함께 노출한다. 라벨은 `g5-custom/inc/config.php` 의 배열을 쓴다.
+
+```php
+<?php
+if (!defined('_GNUBOARD_')) exit;
+?>
+<div class="qa_wrap qa_list">
+
+    <ul class="qa_items">
+    <?php if (count($list) === 0) { ?>
+        <li class="qa_empty">등록된 문의가 없습니다.</li>
+    <?php } ?>
+
+    <?php for ($i = 0; $i < count($list); $i++) { ?>
+        <li class="qa_item">
+            <span class="qa_status <?php echo $qa_status_class[(int)$list[$i]['qa_status']]; ?>">
+                <?php echo get_qa_status_label($list[$i]['qa_status']); ?>
+            </span>
+            <a href="<?php echo $list[$i]['href']; ?>" class="qa_subject">
+                <?php echo get_text($list[$i]['qa_subject']); ?>
+            </a>
+            <span class="qa_name"><?php echo get_text($list[$i]['qa_name']); ?></span>
+            <span class="qa_date"><?php echo substr($list[$i]['qa_datetime'], 0, 10); ?></span>
+        </li>
+    <?php } ?>
+    </ul>
+
+    <div class="board_paging"><?php echo $write_pages; ?></div>
+
+    <div class="board_btn_area">
+        <a href="<?php echo G5_BBS_URL; ?>/qawrite.php" class="btn_board btn_write">문의하기</a>
+    </div>
+
+</div>
+```
+
+### 상세 — `view.skin.php`
+
+문의와 답변을 한 화면에 나눠 보여준다.
+답변은 `qa_parent` 가 원본 `qa_id` 인 레코드다. 진입점이 넘겨주는 변수명을 기본 스킨에서 확인한다.
+
+```php
+<?php
+if (!defined('_GNUBOARD_')) exit;
+?>
+<div class="qa_wrap qa_view">
+
+    <div class="qa_view_head">
+        <span class="qa_status <?php echo $qa_status_class[(int)$qa['qa_status']]; ?>">
+            <?php echo get_qa_status_label($qa['qa_status']); ?>
+        </span>
+        <h2 class="qa_view_subject"><?php echo get_text($qa['qa_subject']); ?></h2>
+        <ul class="qa_view_meta">
+            <li><?php echo get_text($qa['qa_name']); ?></li>
+            <li><?php echo substr($qa['qa_datetime'], 0, 16); ?></li>
+        </ul>
+    </div>
+
+    <div class="qa_view_content">
+        <?php echo nl2br(get_text($qa['qa_content'])); ?>
+    </div>
+
+    <?php if (!empty($answer)) { ?>
+    <div class="qa_answer">
+        <h3 class="qa_answer_title">답변</h3>
+        <div class="qa_answer_content">
+            <?php echo nl2br(get_text($answer['qa_content'])); ?>
+        </div>
+        <p class="qa_answer_date"><?php echo substr($answer['qa_datetime'], 0, 16); ?></p>
+    </div>
+    <?php } else { ?>
+    <p class="qa_answer_none">아직 답변이 등록되지 않았습니다.</p>
+    <?php } ?>
+
+    <div class="board_btn_area">
+        <a href="<?php echo G5_BBS_URL; ?>/qalist.php" class="btn_board btn_list">목록</a>
+    </div>
+
+</div>
+```
+
+### 주의점
+
+- 문의 본문은 `qa_html = 0` 이므로 평문이다. `nl2br(get_text())` 로 출력한다.
+  `get_text()` 없이 출력하면 XSS가 된다.
+- 목록에서 연락처를 노출하지 않는다. 비회원 목록은 누구나 볼 수 있다.
+  이름도 마스킹이 필요한지 프로젝트 초반에 정한다.
+- 비회원 문의 상세 접근은 비밀번호 확인을 거치게 한다. `qa_id` 만으로 열리면 개인정보가 노출된다.
+- 상태 배지는 `qa_status` 값 4가지 모두에 대해 CSS 클래스를 정의한다.
+  값이 배열에 없을 때를 대비해 `get_qa_status_label()` 이 기본값을 반환하게 해 둔다.
+
+## 8. 변환 완료 체크리스트
+
+- 모든 스킨 파일에 `if (!defined('_GNUBOARD_')) exit;` 가 있는가
+- 단축 PHP 태그(`<?`)를 쓰지 않았는가
+- 목록 0건 상태의 마크업이 있는가
+- 원시 DB 값에 `get_text()` 를 적용했는가
+- 가공된 값(`$view['content']`)에 이스케이프를 중복 적용하지 않았는가
+- 권한이 필요한 버튼을 CSS가 아니라 조건 출력으로 처리했는가
+- 문의 폼에 캡차, 동의 체크, 서버 검증이 모두 있는가
+- 본문 영역 이미지에 `max-width: 100%` 가 적용됐는가
+- PC / 태블릿 / 모바일 3개 구간에서 목록과 상세가 깨지지 않는가
